@@ -1,0 +1,187 @@
+vagrant plugin install vagrant-hostmanager
+vagrant up
+------------------------------------------
+------------------------------------------
+                   db01
+------------------------
+vagrant ssh db01
+sudo -i
+yum update -y
+yum install epel-release -y
+yum install git mariadb-server -y    
+systemctl start mariadb
+systemctl enable mariadb
+mysql_secure_installation
+----If you not created your password press (n) # I create a 'admin'
+----Socket Press (Y)
+----Set the root password (Y) (this password will be use in the jdk sql config)
+----Remove anonymous user (Y)
+----Disallow root login remotely (n)
+----Remove test database and access to it (Y)
+----Reload privilege tables now (Y)
+mysql -u root -padmin
+----create database accounts;
+----grant all privileges on accounts.* to 'admin'@'%' identified by 'admin';
+----flush privileges;
+----exit;
+git clone -b main https://github.com/hkhcoder/vprofile-project.git
+cd vprofile-project
+mysql -u root -padmin accounts < src/main/resources/db_backup.sql
+mysql -u root -padmin
+----use accounts;
+----show tables;
+----exit;
+systemctl restart mariadb
+systemctl start firewalld
+systemctl enable firewalld
+firewall-cmd --get-active-zones
+firewall-cmd --zone=public --add-port=3306/tcp --permanent
+firewall-cmd --reload
+systemctl restart mariadb
+exit
+exit
+
+----------------------------------------------------
+----------------------------------------------------
+                       mc01
+-------------------------------
+vagrant ssh mc01
+sudo -i
+yum install epel-release -y
+yum install memcached -y
+systemctl start memcached
+systemctl enable memcached
+systemctl status memcached
+sed -i 's/127.0.0.1/0.0.0.0/g' /etc/sysconfig/memcached
+systemctl restart memcached
+systemctl start firewalld
+systemctl enable firewalld
+firewall-cmd --add-port=11211/tcp
+firewall-cmd --runtime-to-permanent
+firewall-cmd --add-port=11111/udp
+firewall-cmd --runtime-to-permanent
+memcached -p 11211 -U 11111 -u memcached -d
+exit
+exit
+
+-------------------------------------------------------
+-------------------------------------------------------
+                        rmq01
+------------------------------
+vagrant ssh rmq01
+sudo -i
+yum update -y
+yum install epel-release -y
+yum install wget -y
+cd /tmp
+yum -y install centos-release-rabbitmq-38
+yum --enablerepo=centos-rabbitmq-38 -y install rabbitmq-server
+systemctl enable --now rabbitmq-server
+systemctl start firewalld
+systemctl enable firewalld
+firewall-cmd --add-port=5672/tcp
+firewall-cmd --runtime-to-permanent
+systemctl start rabbitmq-server
+systemctl enable rabbitmq-server
+systemctl status rabbitmq-server
+sh -c 'echo "[{rabbit, [{loopback_users, []}]}]." > /etc/rabbitmq/rabbitmq.config'
+rabbitmqctl add_user test test
+rabbitmqctl set_user_tags test administrator
+systemctl restart rabbitmq-server
+reboot
+# wait for 1 to 2 min to boot up the rmq01
+vagrant ssh rmq01
+sudo -i
+systemctl status rabbitmq-server
+exit
+exit
+
+-------------------------------------------------------------
+-------------------------------------------------------------
+                        app01
+------------------------------
+vagrant ssh app01
+sudo -i
+yum update -y
+yum install epel-release -y
+yum -y install java-11-openjdk java-11-openjdk-devel
+yum install git maven wget -y
+cd /tmp
+wget https://archive.apache.org/dist/tomcat/tomcat-9/v9.0.75/bin/apache-tomcat-9.0.75.tar.gz
+tar xzvf apache-tomcat-9.0.75.tar.gz
+useradd --home-dir /usr/local/tomcat --shell /sbin/nologin tomcat
+cp -r /tmp/apache-tomcat-9.0.75/* /usr/local/tomcat/
+chown -R tomcat.tomcat /usr/local/tomcat
+vi /etc/systemd/system/tomcat.service
+------------
+[Unit]
+Description=Tomcat
+After=network.target
+
+[Service]
+User=tomcat
+WorkingDirectory=/usr/local/tomcat
+Environment=JRE_HOME=/usr/lib/jvm/jre
+Environment=JAVA_HOME=/usr/lib/jvm/jre
+Environment=CATALINA_HOME=/usr/local/tomcat
+Environment=CATALINE_BASE=/usr/local/tomcat
+ExecStart=/usr/local/tomcat/bin/catalina.sh run
+ExecStop=/usr/local/tomcat/bin/shutdown.sh
+SyslogIdentifier=tomcat-%i
+
+[Install]
+WantedBy=multi-user.target
+---------------
+systemctl daemon-reload
+systemctl start tomcat
+systemctl enable tomcat
+systemctl start firewalld
+systemctl enable firewalld
+firewall-cmd --get-active-zones
+firewall-cmd --zone=public --add-port=8080/tcp --permanent
+firewall-cmd --reload
+git clone -b main https://github.com/hkhcoder/vprofile-project.git
+cd vprofile-project/
+vim src/main/resources/application.properties
+----------------
+jdkpassword=mysqlpassword (for me it is admin)
+----------------
+mvn install
+systemctl stop tomcat
+rm -rf /usr/local/tomcat/webapps/ROOT*
+cp target/vprofile-v2.war /usr/local/tomcat/webapps/ROOT.war
+systemctl start tomcat
+chown tomcat.tomcat /usr/local/tomcat/webapps -R
+systemctl restart tomcat
+exit
+exit
+
+------------------------------------------------------
+------------------------------------------------------
+                       web01
+-------------------------------
+vagrant ssh web01
+sudo -i
+apt update
+apt upgrade
+reboot
+apt install nginx -y
+vi /etc/nginx/sites-available/vproapp
+-----------------
+upstream vproapp
+{
+        server app01:8080;
+}
+server
+{
+        listen 80;
+        location /{
+                proxy_pass http://vproapp;
+        }
+}
+----------------
+rm -rf /etc/nginx/sites-enabled/default
+ln -s /etc/nginx/sites-available/vproapp /etc/nginx/sites-enabled/vproapp
+systemctl restart nginx
+exit
+exit
